@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*
+!data/README.md
+*.h5ad
+*.mtx
+*.tar.gz
+.env
+media/
+db.sqlite3
+node_modules/
+dist/
+.DS_Store
