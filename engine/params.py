@@ -64,6 +64,12 @@ def params_from_dict(d: dict | None) -> tuple[PreprocessParams, ClusterParams, M
     pre_fields = PreprocessParams.__dataclass_fields__
     clu_fields = ClusterParams.__dataclass_fields__
     mk_fields = MarkerParams.__dataclass_fields__
+    unknown = set(d) - set(pre_fields) - set(clu_fields) - set(mk_fields)
+    if unknown:
+        raise ValueError(f"unknown parameter(s): {', '.join(sorted(unknown))}")
+    for k, v in d.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"parameter {k} must be a number")
     pre = PreprocessParams(**{k: v for k, v in d.items() if k in pre_fields})
     clu = ClusterParams(**{k: v for k, v in d.items() if k in clu_fields})
     mk = MarkerParams(**{k: v for k, v in d.items() if k in mk_fields})
