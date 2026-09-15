@@ -55,6 +55,8 @@ class ClusterParams:
 class MarkerParams:
     n_top: int = 25                    # genes reported per cluster
     alpha: float = 0.05                # BH-adjusted p-value cutoff
+    min_log2fc: float = 0.5            # effect-size floor: with 500+ cells per cluster, a 1.3x
+                                       # shift in a housekeeping gene is "significant" but useless
     chunk_size: int = 4000             # genes per block; peak memory ~ non-zeros in one block
 
 

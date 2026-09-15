@@ -150,7 +150,8 @@ def rank_genes(
     frames = []
     for c in range(k):
         padj = benjamini_hochberg(p_all[c])
-        keep = np.where((z_all[c] > 0) & (padj < mp.alpha))[0]   # up in-cluster AND significant
+        # Up in-cluster, significant after correction, AND a real effect size.
+        keep = np.where((z_all[c] > 0) & (padj < mp.alpha) & (lfc_all[c] >= mp.min_log2fc))[0]
         top = keep[np.argsort(-z_all[c, keep])][: mp.n_top]
         frames.append(pd.DataFrame({
             "cluster": c,

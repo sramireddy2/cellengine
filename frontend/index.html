@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cellengine</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">cellengine <span class="muted">single-cell clustering</span></div>
+  <div id="userbox" class="userbox" hidden>
+    <span id="username"></span>
+    <button id="logout" class="btn btn-ghost">Log out</button>
+  </div>
+</header>
+
+<!-- ===== auth ===== -->
+<section id="auth" class="auth" hidden>
+  <form id="auth-form" class="card auth-card">
+    <h2 id="auth-title">Log in</h2>
+    <label>Username <input name="username" autocomplete="username" required minlength="3"></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required minlength="8"></label>
+    <div id="auth-error" class="error" hidden></div>
+    <div class="row">
+      <button class="btn btn-primary" type="submit" id="auth-submit">Log in</button>
+      <button class="btn btn-ghost" type="button" id="auth-toggle">Create an account</button>
+    </div>
+    <p class="muted small">Demo account: <code>demo</code> / <code>demo-password-1</code> if seeded.</p>
+  </form>
+</section>
+
+<!-- ===== app ===== -->
+<main id="app" class="app" hidden>
+
+  <aside class="sidebar">
+    <div class="card">
+      <h3>Datasets</h3>
+      <ul id="dataset-list" class="list"></ul>
+      <form id="upload-form" class="upload">
+        <input id="upload-file" type="file" accept=".h5ad,.tar.gz,.tgz" required>
+        <input id="upload-name" type="text" placeholder="Name (optional)">
+        <button class="btn btn-primary" type="submit">Upload</button>
+        <div id="upload-status" class="muted small"></div>
+      </form>
+      <p class="muted small">.h5ad or a 10x <code>.tar.gz</code>. The web tier stores the file;
+        a worker opens it and records the shape.</p>
+    </div>
+
+    <div class="card" id="controls" hidden>
+      <h3>Clustering</h3>
+      <label class="slider-label">
+        <span>Leiden resolution <strong id="res-value">1.0</strong></span>
+        <input id="resolution" type="range" min="0.1" max="3" step="0.1" value="1">
+      </label>
+      <p class="muted small">Higher resolution, more clusters. Only Leiden reruns: the graph and UMAP come from cache.</p>
+      <details>
+        <summary>Preprocessing (changes the cache key)</summary>
+        <label>PCA components <input id="n_pcs" type="number" min="5" max="100" value="50"></label>
+        <label>kNN neighbors <input id="n_neighbors" type="number" min="5" max="50" value="15"></label>
+        <label>Highly variable genes <input id="n_top_genes" type="number" min="200" max="5000" step="100" value="2000"></label>
+        <button class="btn" type="button" id="run-btn">Run with these settings</button>
+      </details>
+    </div>
+
+    <div class="card" id="status-card" hidden>
+      <h3>Run status</h3>
+      <ol class="stages" id="stages">
+        <li data-stage="queued">queued</li>
+        <li data-stage="preprocessing">preprocessing <span class="muted">QC, HVG, PCA, kNN, UMAP</span></li>
+        <li data-stage="clustering">clustering <span class="muted">Leiden</span></li>
+        <li data-stage="markers">markers <span class="muted">Wilcoxon + BH</span></li>
+        <li data-stage="done">done</li>
+      </ol>
+      <div id="run-summary" class="small"></div>
+      <div id="run-error" class="error" hidden></div>
+    </div>
+  </aside>
+
+  <section class="main">
+    <div class="card plot-card">
+      <div class="plot-head">
+        <h3 id="plot-title">UMAP</h3>
+        <span id="plot-sub" class="muted small"></span>
+      </div>
+      <div class="plot-wrap">
+        <canvas id="scatter"></canvas>
+        <div id="tooltip" class="tooltip" hidden></div>
+        <div id="plot-empty" class="plot-empty muted">Select a dataset and move the resolution slider.</div>
+      </div>
+      <ul id="legend" class="legend"></ul>
+    </div>
+
+    <div class="card" id="markers-card" hidden>
+      <div class="plot-head">
+        <h3 id="markers-title">Marker genes</h3>
+        <span class="muted small">one-vs-rest Wilcoxon rank-sum, Benjamini-Hochberg adjusted, top 25</span>
+      </div>
+      <div class="table-wrap">
+        <table id="markers-table" class="table">
+          <thead><tr>
+            <th>#</th><th>Gene</th><th title="Wilcoxon z-score">z</th><th title="log2(mean in / mean out), linear scale">log2 FC</th>
+            <th title="fraction of cells in the cluster expressing the gene">% in</th>
+            <th title="fraction of all other cells expressing the gene">% out</th><th>adj. p</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="history-card" hidden>
+      <div class="plot-head">
+        <h3>Run history</h3>
+        <span class="muted small">same preprocessing = same cache key = only Leiden reruns</span>
+      </div>
+      <div class="table-wrap">
+        <table id="history-table" class="table">
+          <thead><tr>
+            <th>When</th><th>Resolution</th><th>PCs</th><th>kNN</th><th>HVG</th><th>Clusters</th>
+            <th>Status</th><th>Cache</th><th>Preprocess</th><th>Leiden</th><th>Markers</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

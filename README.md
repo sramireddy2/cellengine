@@ -18,7 +18,7 @@ Leiden, then recolors the same UMAP.
 
     engine/     framework-free science core (scanpy + hand-written marker stats)
     server/     Django + DRF API, Postgres models, RQ job functions
-    frontend/   UMAP scatter + resolution slider            (phase 3)
+    frontend/   UMAP scatter (canvas) + resolution slider + marker table, no build step
     deploy/     Docker + Kubernetes manifests               (phase 4)
 
 ## Request flow
@@ -41,6 +41,10 @@ process never opens a matrix; only the worker does.
     pytest                              # sqlite + fake redis + sync jobs, no services needed
     python scripts/bench_pbmc3k.py
 
+No-Docker demo (sqlite + fake Redis + jobs run inline in the request):
+
+    python scripts/dev_lite.py          # http://localhost:8000, user demo / demo-password-1
+
 Full stack locally:
 
     docker compose up -d                # postgres + redis
@@ -48,3 +52,13 @@ Full stack locally:
     python server/manage.py seed_demo   # user demo / demo-password-1 + PBMC3k dataset
     python server/manage.py rqworker default      # terminal 1: long-lived worker
     python server/manage.py runserver             # terminal 2: web
+
+## Frontend
+
+Plain HTML + one script, served by Django. The scatter is a canvas, not SVG:
+3k points is fine either way, 50k is not. Hover uses a screen-space grid so the
+nearest-point lookup is O(1). The resolution slider submits a run on release;
+each run is a row in the history table with its cache hit/miss and stage timings,
+so the caching story is visible rather than claimed. Cluster identity never
+relies on color alone: every cluster gets a centroid label on the plot and a
+legend row with its size and top-3 marker genes.
