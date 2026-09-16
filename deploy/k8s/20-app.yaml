@@ -102,6 +102,8 @@ spec:
             - configMapRef: { name: cellengine-config }
             - secretRef: { name: cellengine-secret }
           env:
+            # Pre-import the science stack and warm the JIT at boot (api/apps.py).
+            - { name: CELLENGINE_ROLE, value: worker }
             # Match the CPU limit below. Numba/BLAS cannot see cgroup limits.
             - { name: OPENBLAS_NUM_THREADS, value: "2" }
             - { name: OMP_NUM_THREADS, value: "2" }

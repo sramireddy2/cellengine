@@ -30,6 +30,20 @@ scripts/bench_pbmc3k.py.
 The cold column is numba JIT compilation inside scanpy and umap-learn. It is
 paid once per worker process, which is why the worker is a long-lived
 Deployment (not a Job per upload) and why the JIT cache directory is a volume.
+The worker also warms the JIT on a toy matrix at boot (api/apps.py), so the
+first real run does not pay it either.
+
+Measured through the containerized stack (docker compose, Linux), submit to
+done including queue pickup and both Postgres commits:
+
+| Run | Cache | Submit -> done |
+|---|---|---|
+| First run on a dataset | miss, JIT already warm | 6.2 s |
+| Resolution change | hit | 1.0 s |
+
+RQ forks one child per job so memory from one dataset dies with it. The cost
+is that lazily imported modules are re-imported per child (~2 s of scanpy);
+the worker parent imports the science stack at boot so forks inherit it.
 
 Memory, same dataset:
 

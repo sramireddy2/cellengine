@@ -57,7 +57,13 @@ services:
   worker:
     build: .
     command: ["python", "server/manage.py", "rqworker", "default", "--with-scheduler"]
-    environment: *app_env
+    environment:
+      <<: *app_env
+      CELLENGINE_ROLE: worker      # pre-import scanpy + JIT warmup at boot (api/apps.py)
+    healthcheck:   # the image default curls :8000, which a worker does not serve
+      test: ["CMD", "python", "-c", "import os,redis; redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 30s
+      timeout: 5s
     volumes: ["media:/app/media", "numba:/var/cache/numba"]
     depends_on:
       migrate: { condition: service_completed_successfully }
