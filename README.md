@@ -14,6 +14,42 @@ most, sits downstream of all of them. So we cache the graph keyed by
 sha256(dataset_id + preprocessing_params) and a resolution change reruns only
 Leiden, then recolors the same UMAP.
 
+## Architecture in numbers
+
+All measured on PBMC3k (2,700 cells x 32,738 genes) on a laptop; see
+scripts/bench_pbmc3k.py.
+
+| Step | Cold process | Steady state | Where it runs |
+|---|---|---|---|
+| Load 10x tarball | 1.3 s | 1.3 s | worker |
+| QC -> normalize -> HVG -> PCA -> kNN -> UMAP | ~50 s | ~7 s | worker, cached in Redis |
+| Leiden (resolution change) | 0.1 s | 0.1 s | worker, every run |
+| Marker genes (Wilcoxon + BH, ~14k genes x k clusters) | 0.85 s | 0.85 s | worker, every run |
+| Cache blobs written | graph 2.6 MB + expression 18 MB | | Redis, 24 h TTL |
+
+The cold column is numba JIT compilation inside scanpy and umap-learn. It is
+paid once per worker process, which is why the worker is a long-lived
+Deployment (not a Job per upload) and why the JIT cache directory is a volume.
+
+Memory, same dataset:
+
+| Representation | Size |
+|---|---|
+| Raw counts, dense float32 | 354 MB |
+| Raw counts, CSR (2.6% non-zero) | 18 MB |
+| HVG slice handed to PCA (2,643 x 2,000, dense) | 21 MB |
+| Marker test working set | O(non-zeros), never cells x genes |
+
+Three things found by profiling that are easy to get wrong:
+
+- scipy rankdata returns float32 for float32 input, and a float64 @ float32
+  matmul in numpy skips BLAS (150 ms vs 2 ms per chunk).
+- After scanpy loads, OpenBLAS and numba both spin thread pools; a 9 ms
+  matmul became 160 ms. Worker containers pin OPENBLAS_NUM_THREADS and
+  NUMBA_NUM_THREADS to their CPU limit because BLAS cannot see cgroup limits.
+- With 500+ cells per cluster, housekeeping genes reach p < 1e-40 on a 1.3x
+  shift. Markers require padj < 0.05 AND log2 fold change >= 0.5.
+
 ## Layout
 
     engine/     framework-free science core (scanpy + hand-written marker stats)
