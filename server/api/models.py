@@ -52,6 +52,7 @@ class Run(models.Model):
     dataset = models.ForeignKey(Dataset, on_delete=models.CASCADE, related_name="runs")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="runs")
     params = models.JSONField(default=dict)              # flat dict, see engine.params.params_from_dict
+    job_id = models.CharField(max_length=64, blank=True, default="")   # RQ job, for reconciliation
     preprocess_key = models.CharField(max_length=80, blank=True, default="", db_index=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     cache_hit = models.BooleanField(null=True)           # did the graph come from Redis?
@@ -61,6 +62,8 @@ class Run(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+
+    IN_PROGRESS = ("queued", "preprocessing", "clustering", "markers")
 
     class Meta:
         ordering = ["-created_at"]

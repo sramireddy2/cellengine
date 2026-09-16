@@ -22,6 +22,25 @@ Watch the isolation story:
     kubectl -n cellengine get pods -w          # upload something huge; only the worker restarts
     kubectl -n cellengine logs -f deploy/worker
 
+## The OOM demo (measured)
+
+    docker compose -f docker-compose.yml -f deploy/compose.oom-demo.yml up -d worker
+    # submit a run with a new preprocessing param (cache miss), then poll it
+
+What happens, in order:
+
+1. RQ forks a work horse for the job; preprocessing starts.
+2. ~18 s in, the cgroup OOM killer sends the horse SIGKILL (signal 9).
+3. The parent worker survives, logs `Work-horse terminated unexpectedly`, and
+   marks the RQ job failed.
+4. The next poll of GET /api/runs/{id}/ reconciles the row against Redis and
+   returns `status=failed`, error `Orphaned during preprocessing: worker
+   reported job failed: Work-horse terminated unexpectedly; signal 9`.
+5. The web container never noticed. `docker compose up -d worker` restores the 2G limit.
+
+If the parent itself dies (a hard node OOM), the container restarts and
+`sweep_runs` fails any run whose job record is gone before rqworker starts.
+
 ## What is deliberately not here
 
 - Object storage for uploads (the media PVC is ReadWriteOnce, so web and worker

@@ -56,7 +56,9 @@ services:
 
   worker:
     build: .
-    command: ["python", "server/manage.py", "rqworker", "default", "--with-scheduler"]
+    # sweep_runs fails any run orphaned by a previous worker death; exec makes
+    # rqworker PID 1 so SIGTERM reaches it for a graceful stop.
+    command: ["sh", "-c", "python server/manage.py sweep_runs; exec python server/manage.py rqworker default"]
     environment:
       <<: *app_env
       CELLENGINE_ROLE: worker      # pre-import scanpy + JIT warmup at boot (api/apps.py)

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from . import jobs
 from .infra import enqueue
 from .models import Dataset, MarkerGene, Run
+from .reconcile import reconcile_run
 from .serializers import DatasetSerializer, DatasetUploadSerializer, MarkerGeneSerializer, RunSerializer
 
 User = get_user_model()
@@ -109,7 +110,15 @@ class RunViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         run = serializer.save(owner=self.request.user, params=serializer.validated_data.get("params") or {})
-        enqueue(jobs.run_pipeline, str(run.id))
+        job = enqueue(jobs.run_pipeline, str(run.id))
+        if job is not None:                                  # None in test mode (ran inline)
+            Run.objects.filter(id=run.id).update(job_id=job.id)
+            run.job_id = job.id
+
+    def retrieve(self, request, *args, **kwargs):
+        # The poller is the one staring at the spinner: check the job is alive on every poll.
+        run = reconcile_run(self.get_object())
+        return Response(self.get_serializer(run).data)
 
     def create(self, request, *args, **kwargs):
         resp = super().create(request, *args, **kwargs)

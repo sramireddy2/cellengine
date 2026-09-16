@@ -35,9 +35,9 @@ class RunSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Run
-        fields = ["id", "dataset", "params", "preprocess_key", "status", "cache_hit",
+        fields = ["id", "dataset", "params", "job_id", "preprocess_key", "status", "cache_hit",
                   "n_clusters", "timings", "error", "created_at", "started_at", "finished_at"]
-        read_only_fields = ["id", "preprocess_key", "status", "cache_hit", "n_clusters",
+        read_only_fields = ["id", "job_id", "preprocess_key", "status", "cache_hit", "n_clusters",
                             "timings", "error", "created_at", "started_at", "finished_at"]
 
     def __init__(self, *args, **kwargs):

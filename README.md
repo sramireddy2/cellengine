@@ -81,7 +81,10 @@ Three things found by profiling that are easy to get wrong:
 
 Cluster labels commit in one transaction (status becomes `markers`, the scatter
 can render); marker genes commit in a second one (status `done`). The web
-process never opens a matrix; only the worker does.
+process never opens a matrix; only the worker does. If the worker dies mid-run,
+the next poll reconciles the row against the RQ job in Redis and reports
+`failed` with the stage and cause (api/reconcile.py); see deploy/README.md for
+the measured OOM demo.
 
 ## Dev
 

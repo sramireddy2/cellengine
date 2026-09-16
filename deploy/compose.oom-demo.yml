@@ -1,0 +1,15 @@
+# Overlay that starves the worker so a real run gets OOM-killed. Demo of the
+# isolation + reconciliation story:
+#
+#   docker compose -f docker-compose.yml -f deploy/compose.oom-demo.yml up -d worker
+#   ... submit a run with a new preprocessing param (cache miss) ...
+#   docker compose logs -f worker        # "Work-horse terminated unexpectedly"
+#   GET /api/runs/<id>/                  # status=failed, error names the orphaning
+#   docker compose up -d worker          # back to the normal 2G limit
+services:
+  worker:
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    environment:
+      CELLENGINE_WARMUP: "0"     # warmup itself would be OOM-killed at this limit

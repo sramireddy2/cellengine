@@ -97,7 +97,7 @@ spec:
         - name: worker
           image: cellengine:local
           imagePullPolicy: IfNotPresent
-          command: ["python", "server/manage.py", "rqworker", "default"]
+          command: ["sh", "-c", "python server/manage.py sweep_runs; exec python server/manage.py rqworker default"]
           envFrom:
             - configMapRef: { name: cellengine-config }
             - secretRef: { name: cellengine-secret }
