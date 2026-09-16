@@ -41,6 +41,11 @@ done including queue pickup and both Postgres commits:
 | First run on a dataset | miss, JIT already warm | 6.2 s |
 | Resolution change | hit | 1.0 s |
 
+On Kubernetes with KEDA scaling the worker on RQ queue length: six cache-miss
+runs submitted at once took the worker Deployment from 1 to 4 replicas in
+17 s. Honest caveat: each new replica pays the ~25 s JIT warmup before its
+first job, so scale-out helps sustained load more than a short burst.
+
 RQ forks one child per job so memory from one dataset dies with it. The cost
 is that lazily imported modules are re-imported per child (~2 s of scanpy);
 the worker parent imports the science stack at boot so forks inherit it.
@@ -84,6 +89,8 @@ Three things found by profiling that are easy to get wrong:
     GET  /api/runs/{id}/cells/     four parallel arrays: barcodes, x, y, cluster
     GET  /api/runs/{id}/markers/?cluster=3
 
+Uploads stream into S3-compatible object storage (MinIO locally); the worker
+streams them back out to a temp file. Web and worker share no disk.
 Cluster labels commit in one transaction (status becomes `markers`, the scatter
 can render); marker genes commit in a second one (status `done`). The web
 process never opens a matrix; only the worker does. If the worker dies mid-run,
@@ -124,8 +131,9 @@ legend row with its size and top-3 marker genes.
 ## Deploy
 
 One image for web and worker (Dockerfile). `docker compose up --build` runs the
-whole stack; `deploy/k8s/` has plain manifests for a local cluster with a
-512Mi web tier and a 2Gi worker tier. The web process never imports scanpy;
+whole stack (Postgres, Redis, MinIO, web, worker); `deploy/k8s/` has plain
+manifests for a local cluster with a 512Mi web tier and a 2Gi worker tier, and
+`deploy/k8s-keda/` scales the worker on queue depth. The web process never imports scanpy;
 the worker pins BLAS/numba threads to its CPU limit and persists the numba JIT
 cache. CI runs the tests, a production settings check, and builds + boots the
 image. Details and known gaps in deploy/README.md.

@@ -16,10 +16,15 @@ data:
   DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
   CELLENGINE_MAX_UPLOAD_MB: "500"
   CELLENGINE_CACHE_TTL: "86400"
+  # Object storage for uploads (deploy/k8s/15-minio.yaml). Point these at S3/GCS
+  # in production and delete the MinIO manifest.
+  CELLENGINE_S3_BUCKET: cellengine-uploads
+  CELLENGINE_S3_ENDPOINT: http://minio:9000
 ---
 # Real deployments: create this from a secret manager, never commit a value.
 #   kubectl -n cellengine create secret generic cellengine-secret \
-#     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -hex 32)"
+#     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -hex 32)" \
+#     --from-literal=CELLENGINE_S3_ACCESS_KEY=... --from-literal=CELLENGINE_S3_SECRET_KEY=...
 apiVersion: v1
 kind: Secret
 metadata:
@@ -28,3 +33,5 @@ metadata:
 type: Opaque
 stringData:
   DJANGO_SECRET_KEY: replace-me-local-only
+  CELLENGINE_S3_ACCESS_KEY: cellengine
+  CELLENGINE_S3_SECRET_KEY: cellengine-secret-local

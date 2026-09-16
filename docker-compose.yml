@@ -3,8 +3,9 @@
 #   docker compose up -d postgres redis        services only; run Django + worker on the host
 #   docker compose up --build                  everything in containers (web on :8000)
 #
-# The worker gets a hard memory limit. Upload something too big and the WORKER
-# is OOM-killed and restarted; the web container never notices.
+# Uploads go to MinIO (S3 API). Web and worker share no disk, so `--scale worker=3`
+# works. The worker gets a hard memory limit: an oversized upload OOM-kills the
+# worker's job process; the web container never notices.
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,23 +31,41 @@ services:
       timeout: 3s
       retries: 10
 
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: cellengine
+      MINIO_ROOT_PASSWORD: cellengine-secret
+    ports: ["9000:9000", "9001:9001"]        # 9001 = web console
+    volumes: ["minio:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   migrate:
     build: .
-    command: ["python", "server/manage.py", "migrate", "--noinput"]
+    command: ["sh", "-c", "python server/manage.py wait_for_services && python server/manage.py migrate --noinput && python server/manage.py ensure_bucket"]
     environment: &app_env
       DATABASE_URL: postgres://cellengine:cellengine@postgres:5432/cellengine
       REDIS_URL: redis://redis:6379/0
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-compose-dev-secret-change-me}
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,web
-      DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:8000
+      DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:8000,http://127.0.0.1:8000
+      CELLENGINE_S3_BUCKET: cellengine-uploads
+      CELLENGINE_S3_ENDPOINT: http://minio:9000
+      CELLENGINE_S3_ACCESS_KEY: cellengine
+      CELLENGINE_S3_SECRET_KEY: cellengine-secret
     depends_on:
       postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
 
   web:
     build: .
     ports: ["8000:8000"]
     environment: *app_env
-    volumes: ["media:/app/media"]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -62,11 +81,12 @@ services:
     environment:
       <<: *app_env
       CELLENGINE_ROLE: worker      # pre-import scanpy + JIT warmup at boot (api/apps.py)
+      PYTHONFAULTHANDLER: "1"
     healthcheck:   # the image default curls :8000, which a worker does not serve
       test: ["CMD", "python", "-c", "import os,redis; redis.from_url(os.environ['REDIS_URL']).ping()"]
       interval: 30s
       timeout: 5s
-    volumes: ["media:/app/media", "numba:/var/cache/numba"]
+    volumes: ["numba:/var/cache/numba"]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -77,5 +97,5 @@ services:
 
 volumes:
   pgdata:
-  media:
+  minio:
   numba:

@@ -56,12 +56,41 @@ What happens, in order:
 If the parent itself dies (a hard node OOM), the container restarts and
 `sweep_runs` fails any run whose job record is gone before rqworker starts.
 
+## Object storage
+
+Uploads go to a bucket (MinIO in-cluster, `15-minio.yaml`; S3/GCS in
+production by changing four env values). The web pod streams the upload in,
+the worker streams it to a temp file on its own emptyDir. Nothing on disk is
+shared, so web and worker can be on different nodes and the worker can have
+many replicas. `manage.py ensure_bucket` creates the bucket at deploy time;
+`manage.py wait_for_services` runs first because Kubernetes offers no start
+ordering and a Job that retries while MinIO is still pulling burns its
+backoff budget (measured: it did).
+
+## Autoscaling the worker (KEDA)
+
+    kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.20.2/keda-2.20.2.yaml
+    kubectl apply -f deploy/k8s-keda/
+
+RQ queues are Redis lists, so KEDA's generic redis scaler targets one queued
+job per worker, 1..4 replicas. Measured: six cache-miss runs submitted at
+once, worker Deployment 1 -> 4 replicas in 17 s, all six done in 57 s. New
+replicas pay the ~25 s JIT warmup first, so this helps sustained load more
+than a burst. minReplicaCount stays at 1 for the same reason.
+
+## Local-cluster notes
+
+- `imagePullPolicy: Always` on the app containers: the tag `cellengine:local`
+  never changes, and the node caches by tag. Real deployments use immutable
+  tags and IfNotPresent.
+- If a KEDA pod sits in ImagePullBackOff after install, the Docker Desktop
+  registry mirror hiccuped; `kubectl -n keda delete pod <name>` re-pulls.
+
 ## What is deliberately not here
 
-- Object storage for uploads (the media PVC is ReadWriteOnce, so web and worker
-  share a node). S3/GCS + presigned uploads is the real answer.
-- Managed Postgres/Redis. The in-cluster ones exist so `kubectl apply` works
-  on a laptop.
+- Managed Postgres/Redis/S3. The in-cluster ones exist so `kubectl apply`
+  works on a laptop; each is a config change away.
 - Ingress/TLS. `port-forward` is enough to demo; an Ingress is ten lines when needed.
-- Autoscaling the worker on queue depth (KEDA has an RQ scaler). One replica
-  makes the memory boundary easy to watch.
+- Presigned direct-to-bucket uploads. Today the upload passes through the web
+  pod (512Mi limit, streamed to disk then to the bucket). Presigned PUTs would
+  take the web tier out of the data path entirely.

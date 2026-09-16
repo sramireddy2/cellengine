@@ -88,6 +88,27 @@ STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
 }
+
+# Uploads go to S3-compatible object storage when a bucket is configured
+# (MinIO locally, S3/GCS in production). The web tier streams the upload into
+# the bucket; the worker downloads it to a temp file (api/storage.py). Web and
+# worker then share nothing on disk, so they can live on different nodes and
+# the worker can scale out. Unset => local filesystem under MEDIA_ROOT.
+S3_BUCKET = os.environ.get("CELLENGINE_S3_BUCKET", "")
+if S3_BUCKET and not TESTING:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": S3_BUCKET,
+            "endpoint_url": os.environ.get("CELLENGINE_S3_ENDPOINT") or None,   # None => real AWS
+            "access_key": os.environ.get("CELLENGINE_S3_ACCESS_KEY"),
+            "secret_key": os.environ.get("CELLENGINE_S3_SECRET_KEY"),
+            "region_name": os.environ.get("CELLENGINE_S3_REGION", "us-east-1"),
+            "addressing_style": "path",          # MinIO; virtual-hosted is fine on AWS too
+            "file_overwrite": False,
+            "default_acl": None,
+        },
+    }
 WHITENOISE_USE_FINDERS = DEBUG      # dev: serve straight from frontend/ without collectstatic
 MEDIA_ROOT = Path(os.environ.get("CELLENGINE_MEDIA_ROOT", REPO_DIR / "media"))
 MEDIA_URL = "media/"

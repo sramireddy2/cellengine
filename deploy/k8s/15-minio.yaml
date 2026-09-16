@@ -1,0 +1,62 @@
+# S3-compatible object storage for uploads. In a real environment this is S3 or
+# GCS and this file disappears: only the four CELLENGINE_S3_* values change.
+#
+# Why object storage instead of a shared volume: a ReadWriteOnce PVC pins the
+# web and worker pods to one node and caps the worker at one replica. With a
+# bucket, the web pod streams the upload in, the worker streams it out, and
+# nothing on disk is shared -- so the KEDA scaler in deploy/k8s-keda/ can run
+# several workers.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: cellengine
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: cellengine
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: minio } }
+  template:
+    metadata: { labels: { app: minio } }
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: cellengine-secret, key: CELLENGINE_S3_ACCESS_KEY } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: cellengine-secret, key: CELLENGINE_S3_SECRET_KEY } }
+          ports:
+            - { containerPort: 9000, name: s3 }
+            - { containerPort: 9001, name: console }
+          volumeMounts: [{ name: data, mountPath: /data }]
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: 9000 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: minio-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: cellengine
+spec:
+  selector: { app: minio }
+  ports:
+    - { name: s3, port: 9000 }
+    - { name: console, port: 9001 }

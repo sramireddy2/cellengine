@@ -34,9 +34,12 @@ BATCH = 5000
 def validate_dataset(dataset_id: str) -> None:
     from engine.io import load_counts
 
+    from .storage import local_copy
+
     ds = Dataset.objects.get(id=dataset_id)
     try:
-        adata = load_counts(ds.file.path)
+        with local_copy(ds) as path:
+            adata = load_counts(path)
         ds.n_cells, ds.n_genes = adata.n_obs, adata.n_vars
         ds.status = Dataset.Status.READY
         ds.error = ""
@@ -76,7 +79,9 @@ def run_pipeline(run_id: str) -> None:
         t0 = time.perf_counter()
         pre = cache.get_preprocessed(key, pre_p, need_expr=True)
         if pre is None:
-            adata = load_counts(run.dataset.file.path)
+            from .storage import local_copy
+            with local_copy(run.dataset) as path:
+                adata = load_counts(path)
             pre = preprocess(adata, pre_p)
             del adata
             sizes = cache.put_preprocessed(key, pre)
