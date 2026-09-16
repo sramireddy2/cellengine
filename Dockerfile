@@ -10,7 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     # BLAS/numba see the HOST core count, not the container CPU limit. Left alone,
     # OpenBLAS spins 8+ threads inside a 1-CPU pod and everything gets slower
-    # (measured: 160 ms vs 9 ms per matmul). Pin to 1; raise with the CPU limit.
+    # (measured: 160 ms vs 9 ms per matmul). Keep these at 1 in the worker: the RQ
+    # worker forks a child per job, and GNU OpenMP (scikit-learn kNN) is NOT
+    # fork-safe once a pool exists in the parent (measured: signal 11 in every
+    # work horse with OMP_NUM_THREADS=2). Scale with replicas, not threads.
     OPENBLAS_NUM_THREADS=1 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \

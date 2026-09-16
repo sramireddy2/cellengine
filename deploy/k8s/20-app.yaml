@@ -104,16 +104,22 @@ spec:
           env:
             # Pre-import the science stack and warm the JIT at boot (api/apps.py).
             - { name: CELLENGINE_ROLE, value: worker }
-            # Match the CPU limit below. Numba/BLAS cannot see cgroup limits.
-            - { name: OPENBLAS_NUM_THREADS, value: "2" }
-            - { name: OMP_NUM_THREADS, value: "2" }
-            - { name: NUMBA_NUM_THREADS, value: "2" }
+            # ONE thread per library, not "match the CPU limit". Two reasons, both measured:
+            #  - GNU OpenMP (used by scikit-learn's kNN) is not fork-safe: a pool started by
+            #    the warmup in the parent segfaults in every RQ work horse (signal 11).
+            #  - BLAS/numba/OpenMP pools oversubscribe each other inside a small pod.
+            # Scale with worker replicas, not threads: RQ runs one job per worker anyway.
+            - { name: OMP_NUM_THREADS, value: "1" }
+            - { name: OPENBLAS_NUM_THREADS, value: "1" }
+            - { name: NUMBA_NUM_THREADS, value: "1" }
+            # A segfault in a work horse leaves a Python traceback in the pod log.
+            - { name: PYTHONFAULTHANDLER, value: "1" }
           volumeMounts:
             - { name: media, mountPath: /app/media }
             - { name: numba-cache, mountPath: /var/cache/numba }
           resources:
             requests: { cpu: "1", memory: 1Gi }
-            limits: { cpu: "2", memory: 2Gi }   # the OOM boundary
+            limits: { cpu: "1", memory: 2Gi }   # memory is the OOM boundary; one job = one core
       volumes:
         - name: media
           persistentVolumeClaim: { claimName: media }

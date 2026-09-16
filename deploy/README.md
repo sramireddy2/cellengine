@@ -15,12 +15,27 @@
     kubectl -n cellengine rollout status deploy/web deploy/worker
     kubectl -n cellengine exec deploy/web -- python server/manage.py seed_demo
     kubectl -n cellengine port-forward svc/web 8080:80
-    open http://localhost:8080
+    open http://localhost:8080                  # register a user, upload data/pbmc3k_*.tar.gz
+
+Verified on Docker Desktop Kubernetes (kind-based, v1.36): first run 6.6 s,
+resolution change 1.1 s submit-to-done, same as compose. The migrate Job may
+fail once while Postgres is still pulling; backoffLimit retries it.
 
 Watch the isolation story:
 
-    kubectl -n cellengine get pods -w          # upload something huge; only the worker restarts
+    kubectl -n cellengine get pods -w
     kubectl -n cellengine logs -f deploy/worker
+
+Starve the worker (`kubectl -n cellengine set resources deploy/worker
+--limits=memory=256Mi`, then `kubectl apply -f deploy/k8s/20-app.yaml` to
+restore) and a run's work horse is OOM-killed; the parent worker and both web
+pods stay up, and the next poll reports the run failed with the cause. Same
+mechanism as the compose demo below.
+
+The worker runs every numeric library at ONE thread. This is not laziness:
+GNU OpenMP is not fork-safe, and the worker forks a child per job. With
+OMP_NUM_THREADS=2 every job segfaulted in scikit-learn kNN (signal 11,
+found here, reproduced in a bare container). Scale with replicas.
 
 ## The OOM demo (measured)
 

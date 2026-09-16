@@ -63,6 +63,11 @@ Three things found by profiling that are easy to get wrong:
   NUMBA_NUM_THREADS to their CPU limit because BLAS cannot see cgroup limits.
 - With 500+ cells per cluster, housekeeping genes reach p < 1e-40 on a 1.3x
   shift. Markers require padj < 0.05 AND log2 fold change >= 0.5.
+- GNU OpenMP is not fork-safe. The RQ worker forks a child per job; with
+  OMP_NUM_THREADS=2 the boot warmup starts a libgomp pool in the parent and
+  every child segfaults in scikit-learn kNN (signal 11, found on Kubernetes,
+  reproduced in a bare container). Worker threads stay at 1 per library; scale
+  with replicas. PYTHONFAULTHANDLER=1 is what turned "signal 11" into a traceback.
 
 ## Layout
 
