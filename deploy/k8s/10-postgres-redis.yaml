@@ -1,0 +1,86 @@
+# Postgres and Redis as single-replica in-cluster services. Fine for a local
+# cluster; in a real environment both would be managed services (RDS/Cloud SQL,
+# ElastiCache/Memorystore) and these two files would disappear.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pgdata
+  namespace: cellengine
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: cellengine
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # a PVC cannot be attached to two pods during a rollout
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: cellengine }
+            - { name: POSTGRES_PASSWORD, value: cellengine }
+            - { name: POSTGRES_DB, value: cellengine }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "cellengine"] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: pgdata }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: cellengine
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cellengine
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          # The cache is a cache: cap it and let LRU evict. A miss costs one
+          # preprocess, never correctness.
+          args: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 640Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cellengine
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379 }]

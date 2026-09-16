@@ -1,0 +1,16 @@
+.venv/
+.git/
+.lite/
+.pytest_cache/
+__pycache__/
+*.pyc
+data/*
+!data/README.md
+media/
+server/staticfiles/
+tests/
+deploy/
+.github/
+.claude/
+*.md
+!data/README.md

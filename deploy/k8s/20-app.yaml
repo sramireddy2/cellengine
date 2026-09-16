@@ -1,0 +1,119 @@
+# Web tier + worker tier, same image, different commands and very different
+# resource limits. This is the isolation story:
+#
+#   web     2 replicas, 512Mi limit, never imports scanpy, never opens a matrix
+#   worker  1 replica,  2Gi limit, does all the heavy lifting; an oversized
+#           upload OOM-kills THIS pod, kubelet restarts it, web keeps serving
+#
+# Uploads land on a shared PVC. ReadWriteOnce means web and worker must be on
+# the same node; a real deployment uses object storage (S3/GCS) instead and
+# this PVC goes away. Named as a known boundary, not built.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media
+  namespace: cellengine
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 10Gi } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: cellengine
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: cellengine:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "server/manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef: { name: cellengine-config }
+            - secretRef: { name: cellengine-secret }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cellengine
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      containers:
+        - name: web
+          image: cellengine:local
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: cellengine-config }
+            - secretRef: { name: cellengine-secret }
+          volumeMounts: [{ name: media, mountPath: /app/media }]
+          readinessProbe:
+            httpGet: { path: /api/healthz/, port: 8000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/healthz/, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: media
+          persistentVolumeClaim: { claimName: media }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: cellengine
+spec:
+  selector: { app: web }
+  ports: [{ port: 80, targetPort: 8000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: cellengine
+spec:
+  replicas: 1
+  strategy: { type: Recreate }        # one worker at a time on the RWO media volume
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      terminationGracePeriodSeconds: 1800   # let an in-flight run finish on rollout
+      containers:
+        - name: worker
+          image: cellengine:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "server/manage.py", "rqworker", "default"]
+          envFrom:
+            - configMapRef: { name: cellengine-config }
+            - secretRef: { name: cellengine-secret }
+          env:
+            # Match the CPU limit below. Numba/BLAS cannot see cgroup limits.
+            - { name: OPENBLAS_NUM_THREADS, value: "2" }
+            - { name: OMP_NUM_THREADS, value: "2" }
+            - { name: NUMBA_NUM_THREADS, value: "2" }
+          volumeMounts:
+            - { name: media, mountPath: /app/media }
+            - { name: numba-cache, mountPath: /var/cache/numba }
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "2", memory: 2Gi }   # the OOM boundary
+      volumes:
+        - name: media
+          persistentVolumeClaim: { claimName: media }
+        - name: numba-cache
+          emptyDir: {}                          # JIT cache survives container restarts, not pod deletion

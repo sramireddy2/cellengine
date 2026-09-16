@@ -19,19 +19,21 @@ import traceback
 from django.db import transaction
 from django.utils import timezone
 
-from engine.io import load_counts
-from engine.markers import rank_genes
-from engine.params import params_from_dict
-from engine.pipeline import cluster, preprocess
+from engine.params import params_from_dict      # pure dataclasses, no scanpy
 
-from . import cache
 from .models import CellCluster, Dataset, MarkerGene, Run
+
+# scanpy/numba are imported lazily inside the job bodies. The web process imports
+# this module (to enqueue by function reference) and must stay lean: importing
+# scanpy costs ~2 s and ~250 MB RSS per gunicorn worker, for code it never runs.
 
 log = logging.getLogger(__name__)
 BATCH = 5000
 
 
 def validate_dataset(dataset_id: str) -> None:
+    from engine.io import load_counts
+
     ds = Dataset.objects.get(id=dataset_id)
     try:
         adata = load_counts(ds.file.path)
@@ -54,6 +56,12 @@ def _set_status(run: Run, status: str, **fields) -> None:
 
 
 def run_pipeline(run_id: str) -> None:
+    from engine.io import load_counts
+    from engine.markers import rank_genes
+    from engine.pipeline import cluster, preprocess
+
+    from . import cache
+
     run = Run.objects.select_related("dataset").get(id=run_id)
     if run.status == Run.Status.DONE:
         return                                   # idempotent on retry

@@ -1,7 +1,10 @@
-# Local services only. The Django dev server and the worker run on the host:
-#   docker compose up -d
-#   python server/manage.py migrate && python server/manage.py runserver
-#   python server/manage.py rqworker default
+# Two ways to use this file:
+#
+#   docker compose up -d postgres redis        services only; run Django + worker on the host
+#   docker compose up --build                  everything in containers (web on :8000)
+#
+# The worker gets a hard memory limit. Upload something too big and the WORKER
+# is OOM-killed and restarted; the web container never notices.
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,9 +14,60 @@ services:
       POSTGRES_DB: cellengine
     ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cellengine"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["python", "server/manage.py", "migrate", "--noinput"]
+    environment: &app_env
+      DATABASE_URL: postgres://cellengine:cellengine@postgres:5432/cellengine
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-compose-dev-secret-change-me}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,web
+      DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:8000
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  web:
+    build: .
+    ports: ["8000:8000"]
+    environment: *app_env
+    volumes: ["media:/app/media"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  worker:
+    build: .
+    command: ["python", "server/manage.py", "rqworker", "default", "--with-scheduler"]
+    environment: *app_env
+    volumes: ["media:/app/media", "numba:/var/cache/numba"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 2G }
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  media:
+  numba:

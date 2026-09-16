@@ -18,6 +18,8 @@ TESTING = "pytest" in sys.modules or os.environ.get("CELLENGINE_ENV") == "test"
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-not-secret")
 DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+if not DEBUG and SECRET_KEY == "dev-only-not-secret":
+    raise RuntimeError("Set DJANGO_SECRET_KEY when DJANGO_DEBUG=0")
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o]
 
@@ -35,12 +37,20 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",       # static files from the web pod, no nginx
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# Behind TLS (ingress/load balancer terminates it): mark cookies secure and trust the proxy header.
+if os.environ.get("CELLENGINE_HTTPS") == "1":
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
@@ -73,6 +83,12 @@ CACHE_TTL_SECONDS = int(os.environ.get("CELLENGINE_CACHE_TTL", 24 * 3600))
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [REPO_DIR / "frontend"]
+# Compressed but not hashed: index.html references /static/app.js by plain name.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+WHITENOISE_USE_FINDERS = DEBUG      # dev: serve straight from frontend/ without collectstatic
 MEDIA_ROOT = Path(os.environ.get("CELLENGINE_MEDIA_ROOT", REPO_DIR / "media"))
 MEDIA_URL = "media/"
 MAX_UPLOAD_BYTES = int(os.environ.get("CELLENGINE_MAX_UPLOAD_MB", 500)) * 1024 * 1024

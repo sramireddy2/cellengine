@@ -8,6 +8,7 @@ router.register("datasets", views.DatasetViewSet, basename="dataset")
 router.register("runs", views.RunViewSet, basename="run")
 
 urlpatterns = [
+    path("healthz/", views.healthz),
     path("auth/login/", views.login_view),
     path("auth/register/", views.register_view),
     path("auth/logout/", views.logout_view),

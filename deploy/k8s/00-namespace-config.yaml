@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cellengine
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cellengine-config
+  namespace: cellengine
+data:
+  DATABASE_URL: postgres://cellengine:cellengine@postgres:5432/cellengine
+  REDIS_URL: redis://redis:6379/0
+  DJANGO_DEBUG: "0"
+  DJANGO_ALLOWED_HOSTS: "*"
+  DJANGO_CSRF_TRUSTED_ORIGINS: http://localhost:8080
+  CELLENGINE_MAX_UPLOAD_MB: "500"
+  CELLENGINE_CACHE_TTL: "86400"
+---
+# Real deployments: create this from a secret manager, never commit a value.
+#   kubectl -n cellengine create secret generic cellengine-secret \
+#     --from-literal=DJANGO_SECRET_KEY="$(openssl rand -hex 32)"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cellengine-secret
+  namespace: cellengine
+type: Opaque
+stringData:
+  DJANGO_SECRET_KEY: replace-me-local-only

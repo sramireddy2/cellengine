@@ -14,6 +14,18 @@ from .serializers import DatasetSerializer, DatasetUploadSerializer, MarkerGeneS
 User = get_user_model()
 
 
+# --- health -------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def healthz(request):
+    """Liveness/readiness: can we reach the database? (Redis is the worker's problem.)"""
+    from django.db import connection
+    with connection.cursor() as c:
+        c.execute("SELECT 1")
+    return Response({"ok": True})
+
+
 # --- auth (session based; the frontend is same-origin) ------------------------
 
 @api_view(["POST"])

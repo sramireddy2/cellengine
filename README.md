@@ -19,7 +19,7 @@ Leiden, then recolors the same UMAP.
     engine/     framework-free science core (scanpy + hand-written marker stats)
     server/     Django + DRF API, Postgres models, RQ job functions
     frontend/   UMAP scatter (canvas) + resolution slider + marker table, no build step
-    deploy/     Docker + Kubernetes manifests               (phase 4)
+    deploy/     Kubernetes manifests + deploy notes (see deploy/README.md)
 
 ## Request flow
 
@@ -62,3 +62,12 @@ each run is a row in the history table with its cache hit/miss and stage timings
 so the caching story is visible rather than claimed. Cluster identity never
 relies on color alone: every cluster gets a centroid label on the plot and a
 legend row with its size and top-3 marker genes.
+
+## Deploy
+
+One image for web and worker (Dockerfile). `docker compose up --build` runs the
+whole stack; `deploy/k8s/` has plain manifests for a local cluster with a
+512Mi web tier and a 2Gi worker tier. The web process never imports scanpy;
+the worker pins BLAS/numba threads to its CPU limit and persists the numba JIT
+cache. CI runs the tests, a production settings check, and builds + boots the
+image. Details and known gaps in deploy/README.md.
