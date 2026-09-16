@@ -35,6 +35,7 @@ jobs:
         with:
           context: .
           push: false
+          load: true          # buildx keeps the image in its cache unless told to load it
           tags: cellengine:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -45,4 +46,6 @@ jobs:
             sh -c "python server/manage.py migrate -v 0 && gunicorn config.wsgi:application --chdir server -b 0.0.0.0:8000"
           for i in $(seq 1 30); do curl -fsS http://localhost:8000/api/healthz/ && break; sleep 2; done
           curl -fsS http://localhost:8000/api/healthz/
+          curl -fsS -o /dev/null http://localhost:8000/static/app.js     # whitenoise serves collectstatic output
+          curl -fsS http://localhost:8000/api/auth/me/
           docker logs smoke | tail -20
