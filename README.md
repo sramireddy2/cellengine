@@ -21,11 +21,13 @@
 
 ---
 
-## What it does
+## What this is
 
-You upload a single-cell RNA-seq count matrix (rows are cells, columns are genes, each value is how many mRNA molecules of that gene were detected in that cell). cellengine runs the standard pipeline, draws the cells as a UMAP scatter colored by cluster, and ranks the marker genes that make each cluster distinct. Move the resolution slider and it reclusters in about a second, because the expensive part is cached.
+Single-cell RNA-seq gives you a big matrix: one row per cell, one column per gene, each number is how many copies of that gene's mRNA showed up in that cell. Cells with similar expression cluster together, and those clusters usually turn out to be cell types. Marker genes are how you tell which cluster is which.
 
-On the demo dataset (10x PBMC 3k, the "hello world" of the field) the clusters come out as the textbook cell types: T cells light up with `CD3D` and `IL7R`, B cells with `MS4A1` and `CD79A`, monocytes with `CD14` and `S100A8`, NK cells with `NKG7` and `GZMA`.
+cellengine is a small web app around that workflow. You upload a matrix, it runs the standard pipeline, draws the cells as a UMAP colored by cluster, and lists the marker genes for whatever cluster you click. The part I care about: when you drag the resolution slider it reclusters in about a second, because the expensive work is cached and only the cheap step reruns.
+
+The demo dataset is the 10x PBMC 3k set that every tutorial uses. The clusters come out as you'd hope: T cells (`CD3D`, `IL7R`), B cells (`MS4A1`, `CD79A`), monocytes (`CD14`, `S100A8`), NK cells (`NKG7`, `GZMA`).
 
 ## 🛠️ Tech stack
 
@@ -42,83 +44,60 @@ On the demo dataset (10x PBMC 3k, the "hello world" of the field) the clusters c
 | **Orchestration** | Kubernetes manifests + [KEDA](https://keda.sh/) scaling the worker on queue depth | Memory-capped worker pods so a bad upload kills a job, not the site. |
 | **CI** | GitHub Actions: pytest, production settings check, image build + boot smoke test | Green badge or it didn't happen. |
 
-## 🧠 The one design decision that matters
+## 🧠 The idea that makes it fast
 
 ```
-QC → normalize → HVG → PCA → kNN graph → UMAP      cached    (~6 s warm, ~50 s cold)
-                                       → Leiden     rerun     (~0.1 s)
+QC → normalize → HVG → PCA → kNN graph → UMAP      cached
+                                       → Leiden     reruns every time
 ```
 
-Everything left of the arrow depends only on the dataset and the preprocessing parameters. Leiden's resolution, the knob researchers actually turn, sits downstream of all of it. So the graph and the UMAP are cached in Redis under `sha256(dataset_id + preprocessing_params)`, and a resolution change reruns Leiden alone and recolors the same dots. The points never move when you drag the slider, which is both a nicer experience and visible proof that only Leiden ran.
+Everything on the top line only depends on the data and the preprocessing settings. Leiden's resolution, the knob people actually fiddle with, comes after all of it. So I cache the graph and the UMAP in Redis under a hash of the dataset plus the preprocessing params, and a resolution change just reruns Leiden and recolors the same dots. That's why the two panels in the picture above have identical point positions. It's also a nice sanity check while you're using it: if the dots move, something's wrong.
 
-## 📈 Numbers, not adjectives
+Numbers on PBMC 3k, going through the real containerized stack, from hitting submit to the run being done:
 
-Everything below was measured, most of it more than once. Dataset is PBMC 3k: 2,700 cells × 32,738 genes.
+- first run on a dataset: **~6 s**
+- changing the resolution afterwards: **~1 s**
 
-**Submit to done**, through the containerized stack, including queue pickup and both Postgres commits:
+The first run in a fresh worker process is closer to 50 seconds, and almost all of that is numba compiling scanpy's kernels. So the worker is a long-lived process that warms itself up on a tiny fake matrix at boot, and users never see that cost.
 
-| Run | Cache | Time |
-|---|---|---|
-| First run on a dataset | miss | **6.2 s** |
-| Resolution change | hit | **1.0 s** |
-| Six cache-miss runs at once on Kubernetes | KEDA scaled the worker 1 → 4 replicas in 17 s | all done in 57 s |
-
-**Per stage**, inside the worker:
-
-| Step | Cold process | Warm |
-|---|---|---|
-| Load 10x tarball | 1.3 s | 1.3 s |
-| QC → normalize → HVG → PCA → kNN → UMAP | ~50 s | ~7 s |
-| Leiden | 0.1 s | 0.1 s |
-| Marker genes (Wilcoxon + BH, ~14k genes × k clusters) | 0.85 s | 0.85 s |
-
-The cold column is numba compiling scanpy's kernels. It's paid once per worker process, which is why the worker is a long-lived Deployment rather than a Job per upload, and why it warms the JIT on a toy matrix at boot.
-
-**Memory**, same dataset:
-
-| Representation | Size |
-|---|---|
-| Raw counts, dense float32 | 354 MB |
-| Raw counts, CSR (2.6% non-zero) | **18 MB** |
-| The only dense allocation: 2,643 × 2,000 HVG slice handed to PCA | 21 MB |
-| Marker test working set | proportional to non-zeros, never cells × genes |
+Memory-wise the raw matrix is 354 MB if you make it dense and 18 MB as a sparse CSR, since it's 97% zeros. It stays sparse until PCA, which only sees the 2,000 most variable genes anyway.
 
 ## 🔬 The sparse Wilcoxon trick
 
-For every (cluster, gene) pair I need a one-vs-rest Wilcoxon rank-sum test. The naive version densifies each gene column and ranks it. But 93% of the matrix is zeros, and every zero in a column is a single tie group whose average rank is just `(n_zeros + 1) / 2`. So the implementation sorts only the non-zeros once (one `lexsort` keyed by gene then value), assigns tie-averaged ranks, and adds the zero group analytically. Rank sums, counts, and means per (cluster, gene) fall out of `np.bincount` on a flattened key.
+To find marker genes I run a one-vs-rest Wilcoxon rank-sum test for every cluster and every gene, then correct with Benjamini-Hochberg. The obvious way is to densify each gene column and rank it. But almost every value is zero, and all the zeros in a column are one big tie with a known average rank. So I only sort the non-zeros, once, and add the zero group with a formula. All the per-cluster sums come out of `np.bincount`. Went from 6.8 s to 0.85 s with identical output, and I check it against `scipy.stats.mannwhitneyu` in the tests.
 
-Result: 6.8 s → 0.85 s, identical output, verified against `scipy.stats.mannwhitneyu` to six decimal places. And with 14,000 genes per cluster, Benjamini-Hochberg isn't optional: uncorrected `p < 0.05` would hand you ~700 false positives per cluster. There's also a fold-change floor, because with 500 cells in a cluster a housekeeping gene hits `p < 1e-40` on a 1.3× shift.
+Two things I learned doing this. With 14,000 genes per cluster you can't skip multiple-testing correction, or you get hundreds of "significant" genes that are noise. And with a few hundred cells in a cluster, even a housekeeping gene that's 1.3× higher will have a p-value of 10⁻⁴⁰, so there's a fold-change floor too. Statistically significant and biologically interesting are different things.
 
-## 🧱 How a run flows
+## 🧱 How a run works
 
 ```
-POST /api/datasets/          multipart upload → object storage → worker validates the shape
-POST /api/runs/              {dataset, params} → 202 + run id
-GET  /api/runs/{id}/         poll: queued → preprocessing → clustering → markers → done
-GET  /api/runs/{id}/cells/   four parallel arrays: barcodes, x, y, cluster
+POST /api/datasets/          upload → object storage → worker checks it opens and records the shape
+POST /api/runs/              {dataset, params} → 202 and a run id
+GET  /api/runs/{id}/         poll it: queued → preprocessing → clustering → markers → done
+GET  /api/runs/{id}/cells/   x, y, cluster, barcode as four arrays
 GET  /api/runs/{id}/markers/?cluster=3
 ```
 
-A few things I'd defend in a design review:
+Some decisions worth mentioning:
 
-- **Two commits per run.** Cell labels land in one transaction and the status flips to `markers`, so the scatter can render while the Wilcoxon test finishes. Markers land in a second transaction. A run showing 60% of its cells is worse than no run.
-- **The web process never imports scanpy.** Measured: it boots in 1.8 s with neither scanpy nor numba loaded. Opening a matrix inside a request handler is exactly the memory spike the worker tier exists to absorb.
-- **Runs are reconciled against the queue on every poll.** If the worker's job process is OOM-killed, the next `GET` asks Redis what happened and reports `failed` with the stage and the signal. I starved the worker to 256 MB and watched this happen; the web tier never noticed. Details in [deploy/README.md](deploy/README.md).
-- **Unknown parameters are rejected.** A typo like `resolutoin` is a 400 with the key named, not a silent run on defaults.
+- The web process never opens a matrix and never even imports scanpy. All the heavy stuff happens in the worker, which has a hard memory limit. If someone uploads something huge, the worker's job process gets OOM-killed and the site keeps running.
+- Cell labels are committed in one transaction, marker genes in a second one. A half-written run is worse than no run. The status flips to `markers` between the two, so the scatter can draw while the stats finish.
+- If the worker dies mid-run, the next poll of that run asks Redis what happened to the job and reports `failed` with the reason, instead of spinning forever. I tested this by starving the worker to 256 MB and watching a run die at the 18-second mark.
+- Typos in parameter names are a 400 that tells you the key, not a silent run on defaults.
 
-## 🐛 Five things profiling taught me
+## 🐛 Things profiling taught me
 
-These are the parts I'd actually want to talk about.
+I'd rather list these than pretend the first version was fast.
 
-1. **numpy skips BLAS on mixed dtypes.** `scipy.stats.rankdata` returns float32 for float32 input, and a float64 @ float32 matmul falls off the fast path. 150 ms → 2 ms per chunk once everything was float64.
-2. **Thread pools fight.** After scanpy loads, OpenBLAS and numba both spin up pools. A 9 ms matmul became 160 ms. Containers make this worse because BLAS sees the host's cores, not the cgroup limit.
-3. **GNU OpenMP is not fork-safe.** The RQ worker forks a child per job. With `OMP_NUM_THREADS=2`, the boot warmup started a libgomp pool in the parent and every child segfaulted inside scikit-learn's kNN. Found on Kubernetes, reproduced in a bare container, fixed with one thread per library and `PYTHONFAULTHANDLER=1`, which is what turned "signal 11" into a traceback.
-4. **Fork re-imports lazy modules.** Making the web tier lean meant importing scanpy lazily inside the job, which then cost ~2 s in every forked child. The worker parent now imports the science stack at boot so forks inherit it. Cache hits went from 3 s to 1 s.
-5. **On Windows, `localhost` costs 2 seconds.** Python's HTTP client tries IPv6 first; Django's dev server binds IPv4. Use `127.0.0.1` before you benchmark anything.
+1. **numpy skips BLAS when dtypes are mixed.** `rankdata` on float32 input gives float32 back, and a float64 @ float32 matmul quietly takes the slow path. 150 ms → 2 ms per chunk.
+2. **Thread pools fight each other.** After scanpy loads, OpenBLAS and numba both spin up threads and a 9 ms matmul became 160 ms. In a container it's worse, because BLAS sees the host's cores, not the pod's limit.
+3. **GNU OpenMP isn't fork-safe.** RQ forks a child per job. With two OpenMP threads, the warmup started a thread pool in the parent and every child segfaulted inside scikit-learn's kNN. Only showed up on Kubernetes. The fix is one thread per library; scale with replicas instead. `PYTHONFAULTHANDLER=1` is what turned "signal 11" into a stack trace.
+4. **Forked children re-import lazy modules.** Keeping scanpy out of the web tier meant importing it lazily in the job, which then cost 2 s per fork. Now the worker imports it once at boot and the children inherit it. Cache hits went from 3 s to 1 s.
+5. **On Windows, `localhost` costs two seconds.** Python's HTTP client tries IPv6 first and Django's dev server only listens on IPv4. Benchmark against `127.0.0.1`.
 
 ## 🚀 Running it
 
-**Tests only** (sqlite + fake Redis + inline jobs, no services needed):
+Just the tests (sqlite, fake Redis, jobs run inline, no services needed):
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate      # or source .venv/bin/activate
@@ -126,34 +105,31 @@ pip install -r requirements.txt
 pytest
 ```
 
-**No-Docker demo**, same trick, whole app on one process:
+Whole app with no Docker, same trick:
 
 ```bash
 python scripts/fetch_pbmc3k.py
 python scripts/dev_lite.py           # http://localhost:8000 · demo / demo-password-1
 ```
 
-**The real stack** (Postgres, Redis, MinIO, web, worker):
+The real thing (Postgres, Redis, MinIO, web, worker):
 
 ```bash
 docker compose up --build
 ```
 
-**Kubernetes** with a memory-capped worker and queue-depth autoscaling: see [deploy/README.md](deploy/README.md). It includes the OOM demo and the exact commands.
+Kubernetes, with the memory-capped worker and autoscaling: [deploy/README.md](deploy/README.md) has the commands and the OOM demo.
 
 ## 🗂️ Layout
 
 ```
-engine/      framework-free science core: pipeline, cache serialization, sparse Wilcoxon
-server/      Django + DRF API, models, RQ jobs, reconciliation, management commands
-frontend/    index.html + app.js + style.css, served by Django, no build step
-deploy/      Dockerfile lives at the root; k8s manifests, KEDA scaler, deploy notes here
-tests/       25 tests: scipy oracle for the stats, planted-marker recovery, cache roundtrip,
-             end-to-end API with cache hit/miss, orphaned-run reconciliation, remote storage
+engine/      the science: pipeline, cache serialization, sparse Wilcoxon. No Django in here.
+server/      Django + DRF API, models, RQ jobs, run reconciliation, management commands
+frontend/    index.html + app.js + style.css, served by Django
+deploy/      k8s manifests, KEDA scaler, deploy notes (Dockerfile is at the root)
+tests/       25 tests: stats vs scipy, planted markers, cache roundtrip, API end to end, orphaned runs, remote storage
 ```
 
-## 🙋 Why I built it
+## Why I built it
 
-Before single-cell sequencing you could only measure average gene expression across a whole tissue sample, which blurs distinct cell populations together. Clustering individual cells by expression is how you find those populations, and marker genes are how you name them. I wanted a project where the systems work (caching, sparse memory, transactional writes, worker isolation) was in service of something real, and where every architectural claim had a number behind it.
-
-Scoped deliberately: 3k–50k cells, one dataset format family, one clustering algorithm. The architecture scales further; I'd rather show one measured path than claim ten.
+I wanted a project where the systems work was in service of something real, and where I could put a number next to every claim instead of hand-waving about scale. It's scoped on purpose: 3k–50k cells, one clustering algorithm, one demo dataset. Everything in it has been run end to end on a real cluster, and the parts I'd want to talk about are the ones above.
